@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+# App data (ephemeral locally, Postgres in production)
+*.db
+*.db-wal
+*.db-shm
+# Secrets (never commit — set these in the Pxxl dashboard instead)
+.env
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

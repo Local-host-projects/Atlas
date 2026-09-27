@@ -1,0 +1,1028 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Atlas — Provider Map Ops</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+tailwind.config = {
+  theme: { extend: {
+    colors: { brand: {50:'#ecfdf4',100:'#d1fae3',500:'#00b578',600:'#009e68',700:'#07825a'}, ink:'#101828' },
+    boxShadow: { card: '0 8px 30px rgba(16,24,40,.10)' }
+  }}
+}
+</script>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<link rel="stylesheet" href="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.css" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.js"></script>
+<style>
+  html,body{height:100%;background:#f4f7f5;font-family:Inter,ui-sans-serif,system-ui}
+  #map{position:absolute;inset:0;z-index:0}
+  .flat{border:1px solid #e6ece9}
+  .pin{width:26px;height:26px;border-radius:9999px;display:flex;align-items:center;justify-content:center;
+    font-size:13px;font-weight:800;color:#fff;border:3px solid #fff;box-shadow:0 2px 8px rgba(0,0,0,.25)}
+  .bar{cursor:pointer;border-radius:8px 8px 4px 4px;min-width:14px}
+  .bar:hover{outline:2px solid #00b578}
+  .dragging{opacity:.5}
+  #sidebar{transition:width .2s ease;max-width:calc(100vw - 2rem)}
+  /* ---- desktop windows: sharp, flat, OS-like ---- */
+  #winLayer{position:absolute;inset:0;z-index:900;pointer-events:none;overflow:hidden}
+  .win{position:absolute;pointer-events:auto;display:flex;flex-direction:column;background:#fff;
+    border:1px solid #cfd8d3;border-radius:0;box-shadow:0 12px 40px rgba(16,24,40,.18);
+    max-width:calc(100vw - 1rem);min-width:280px;min-height:180px}
+  .winHead{cursor:move;user-select:none;-webkit-user-select:none;background:#101828;color:#fff;
+    display:flex;align-items:center;gap:6px;padding:0 0 0 10px;height:34px;flex-shrink:0;border-radius:0}
+  .winHead .wtitle{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+    font-size:12px;font-weight:800;letter-spacing:.02em}
+  .wbtn{width:34px;height:34px;display:flex;align-items:center;justify-content:center;font-size:13px;
+    font-weight:800;color:#cbd5d1;border-radius:0;background:transparent;border:none;cursor:pointer;flex-shrink:0}
+  .wbtn:hover{background:#1f2937;color:#fff}
+  .wbtn.wcls:hover{background:#dc2626;color:#fff}
+  .wbody{overflow-y:auto;padding:12px;flex:1;min-height:0;background:#fff;border-radius:0}
+  .win.dragging-win{opacity:.92}
+  .win.focused{border-color:#00b578}
+  .rz{position:absolute;z-index:5;border-radius:0}
+  .rz-se{right:0;bottom:0;width:18px;height:18px;cursor:nwse-resize;
+    background:linear-gradient(135deg,transparent 50%,#00b578 50%)}
+  .rz-e{right:0;top:34px;bottom:0;width:7px;cursor:ew-resize}
+  .rz-s{left:0;right:0;bottom:0;height:7px;cursor:ns-resize}
+  #snapPreview{position:absolute;z-index:950;pointer-events:none;display:none;
+    background:rgba(0,181,120,.15);border:2px solid #00b578;border-radius:0}
+  #taskbar{position:absolute;left:0;right:0;bottom:0;height:36px;z-index:1003;background:#101828;color:#fff;
+    display:flex;align-items:center;gap:4px;padding:0 8px;user-select:none;border-radius:0}
+  .tbtn{background:transparent;border:none;color:#cbd5d1;font-size:12px;font-weight:700;
+    padding:0 10px;height:36px;cursor:pointer;white-space:nowrap;border-radius:0;max-width:180px;
+    overflow:hidden;text-overflow:ellipsis}
+  .tbtn:hover{background:#1f2937;color:#fff}
+  .tbtn.tactive{background:#00b578;color:#fff}
+  .tbtn.tmin{opacity:.55}
+  .wmenu{position:absolute;z-index:1200;background:#fff;border:1px solid #cfd8d3;border-radius:0;
+    box-shadow:0 12px 40px rgba(16,24,40,.18);padding:4px;min-width:190px}
+  .wmenu button{display:block;width:100%;text-align:left;font-size:13px;font-weight:600;
+    padding:8px 10px;border-radius:0;background:none;border:none;cursor:pointer;color:#101828}
+  .wmenu button:hover{background:#f2f6f3}
+  .chip-active{background:#101828!important;color:#fff!important;border-color:#101828!important}
+  .tool-active{background:#101828!important;color:#fff!important}
+  .leaflet-container{font-family:inherit}
+  ::-webkit-scrollbar{width:8px;height:8px}::-webkit-scrollbar-thumb{background:#d3ddd8;border-radius:8px}
+</style>
+</head>
+<body class="text-ink overflow-hidden">
+
+<div id="map"></div>
+<div id="winLayer"></div>
+
+<!-- top floating bar -->
+<header class="absolute top-4 left-4 right-4 z-[1000] flex items-center gap-3 pointer-events-none flex-wrap">
+  <div class="pointer-events-auto flex items-center gap-3 bg-white flat shadow-card rounded-2xl pl-4 pr-2 py-2">
+    <div class="w-9 h-9 rounded-xl bg-brand-500 text-white flex items-center justify-center font-black text-lg">A</div>
+    <div class="leading-tight">
+      <div class="font-extrabold tracking-tight">Atlas</div>
+      <div class="text-[11px] text-gray-500 -mt-0.5">provider map ops</div>
+    </div>
+    <div class="hidden md:flex items-center bg-[#f2f6f3] rounded-xl px-3 py-2 ml-2 w-[260px]">
+      <span class="text-gray-400 mr-2">⌕</span>
+      <input id="q" placeholder="Search name, area, service…" class="bg-transparent outline-none text-sm w-full" />
+    </div>
+  </div>
+  <div class="pointer-events-auto hidden md:flex items-center gap-1 bg-white flat shadow-card rounded-2xl p-1.5 text-sm font-semibold">
+    <button data-status="all" class="statusChip chip-active px-3 py-1.5 rounded-xl border border-transparent">All</button>
+    <button data-status="available" class="statusChip px-3 py-1.5 rounded-xl border border-transparent flex items-center gap-1.5"><span class="w-2 h-2 rounded-full bg-brand-500"></span>Available</button>
+    <button data-status="busy" class="statusChip px-3 py-1.5 rounded-xl border border-transparent flex items-center gap-1.5"><span class="w-2 h-2 rounded-full bg-amber-500"></span>Busy</button>
+    <button data-status="closed" class="statusChip px-3 py-1.5 rounded-xl border border-transparent flex items-center gap-1.5"><span class="w-2 h-2 rounded-full bg-gray-400"></span>Closed</button>
+  </div>
+  <div class="flex-1"></div>
+  <div class="pointer-events-auto flex items-center gap-2">
+    <div class="bg-white flat shadow-card rounded-2xl p-1 flex text-sm font-bold">
+      <button id="modeDash" class="px-3 py-1.5 rounded-xl bg-ink text-white">Dashboard</button>
+      <button id="modeMap" class="px-3 py-1.5 rounded-xl text-gray-500">Map</button>
+    </div>
+    <div class="relative">
+      <button id="newDashBtn" class="bg-brand-500 text-white shadow-card px-3 h-10 text-sm font-bold" style="border-radius:0" title="Open a new dashboard window">+ Dashboard</button>
+    </div>
+    <div id="userChip" class="hidden items-center gap-2 bg-white flat shadow-card rounded-2xl px-3 h-10 text-xs font-bold">
+      <span class="w-2 h-2 rounded-full bg-brand-500"></span><span id="userLabel">—</span>
+    </div>
+    <button id="authBtn" class="bg-ink text-white rounded-2xl px-4 h-10 text-sm font-bold shadow-card">Login</button>
+    <button id="collapseBtn" class="bg-white flat shadow-card rounded-2xl w-10 h-10 font-bold" title="Collapse sidebar to rail">☰</button>
+  </div>
+</header>
+
+<!-- draw toolbox -->
+<div id="drawbox" class="absolute z-[1000] right-4 top-[76px] bg-white flat shadow-card rounded-2xl p-1.5 flex flex-col gap-1 text-sm font-bold w-[52px]">
+  <button data-draw="freehand" class="drawBtn h-10 rounded-xl hover:bg-[#f2f6f3]" title="Freehand draw">✍</button>
+  <button data-draw="polygon" class="drawBtn h-10 rounded-xl hover:bg-[#f2f6f3]" title="Polygon (click-click)">⬠</button>
+  <button data-draw="rectangle" class="drawBtn h-10 rounded-xl hover:bg-[#f2f6f3]" title="Rectangle">▭</button>
+  <button data-draw="circle" class="drawBtn h-10 rounded-xl hover:bg-[#f2f6f3]" title="Circle">◯</button>
+  <button id="clearDraw" class="h-10 rounded-xl hover:bg-red-50 text-xs" title="Clear drawing">✕</button>
+</div>
+
+<!-- sidebar dashboard = the main window on the map desktop -->
+<aside id="sidebar" class="absolute z-[1000] left-4 top-[76px] bottom-[196px] w-[384px] bg-white flex overflow-hidden" style="border:1px solid #cfd8d3;border-radius:0;box-shadow:0 12px 40px rgba(16,24,40,.18)">
+  <div id="dashTitle" class="absolute top-0 left-0 right-0 h-[30px] bg-ink text-white flex items-center gap-1 pl-2.5 pr-1 z-10 select-none" style="cursor:move;border-radius:0">
+    <span class="text-[11px] font-extrabold tracking-wide flex-1 truncate">◈ DASHBOARD</span>
+    <button id="dashMin" class="wbtn" style="width:30px;height:30px" title="Minimize">–</button>
+    <button id="dashMax" class="wbtn" style="width:30px;height:30px" title="Maximize / restore">▢</button>
+    <button id="dashClose" class="wbtn wcls" style="width:30px;height:30px" title="Close">✕</button>
+  </div>
+  <div class="w-[76px] shrink-0 bg-[#f7faf8] border-r border-[#e6ece9] flex flex-col items-center py-3 gap-2" style="margin-top:30px">
+    <button data-tab="list" class="tabBtn w-12 h-12 rounded-2xl bg-ink text-white font-bold" title="Providers">◉</button>
+    <button data-tab="add" class="tabBtn w-12 h-12 rounded-2xl bg-white flat font-bold" title="Add provider">＋</button>
+    <button data-tab="request" class="tabBtn w-12 h-12 rounded-2xl bg-white flat font-bold" title="Request form">✉</button>
+    <button data-tab="manage" class="tabBtn w-12 h-12 rounded-2xl bg-white flat font-bold" title="Manage">⚙</button>
+    <div class="flex-1"></div>
+    <button id="wideBtn" class="w-12 h-12 rounded-2xl bg-white flat font-bold" title="Expand sidebar wide">⇔</button>
+  </div>
+  <div id="panel" class="flex-1 min-w-0 flex flex-col" style="margin-top:30px">
+    <div class="px-4 pt-4 pb-3 border-b border-[#eef3f0]">
+      <div class="flex items-center justify-between">
+        <h2 id="panelTitle" class="font-extrabold text-[15px]">Service providers</h2>
+        <span id="count" class="text-[11px] font-bold bg-brand-50 text-brand-700 px-2 py-1 rounded-lg">0</span>
+      </div>
+      <div id="subHint" class="text-[12px] text-gray-500 mt-1">Login as manager to edit. Drag a card onto the map to re-assign.</div>
+      <div class="flex gap-2 mt-3">
+        <select id="areaSel" class="text-sm bg-[#f2f6f3] rounded-xl px-2 py-2 outline-none w-full"><option value="all">All areas</option></select>
+      </div>
+    </div>
+    <div class="flex-1 overflow-y-auto p-3 space-y-2" id="list"></div>
+    <div id="addPane" class="hidden flex-1 overflow-y-auto p-4 space-y-2">
+      <div class="text-sm font-bold">New service provider <span class="text-[10px] font-bold text-brand-700 bg-brand-50 px-2 py-0.5 rounded-lg ml-1">manager+</span></div>
+      <input id="f_name" placeholder="Full name" class="w-full bg-[#f2f6f3] rounded-xl px-3 py-2.5 text-sm outline-none" />
+      <div class="grid grid-cols-2 gap-2">
+        <input id="f_email" placeholder="Email" class="bg-[#f2f6f3] rounded-xl px-3 py-2.5 text-sm outline-none" />
+        <input id="f_phone" placeholder="Phone" class="bg-[#f2f6f3] rounded-xl px-3 py-2.5 text-sm outline-none" />
+      </div>
+      <div class="grid grid-cols-2 gap-2">
+        <input id="f_lat" placeholder="Lat e.g. 6.5244" class="bg-[#f2f6f3] rounded-xl px-3 py-2.5 text-sm outline-none" />
+        <input id="f_lng" placeholder="Lng e.g. 3.3792" class="bg-[#f2f6f3] rounded-xl px-3 py-2.5 text-sm outline-none" />
+      </div>
+      <div class="grid grid-cols-2 gap-2">
+        <input id="f_area" placeholder="Area e.g. Ikeja" class="bg-[#f2f6f3] rounded-xl px-3 py-2.5 text-sm outline-none" />
+        <select id="f_status" class="bg-[#f2f6f3] rounded-xl px-3 py-2.5 text-sm outline-none">
+          <option value="available">available</option><option value="busy">busy</option><option value="closed">closed</option>
+        </select>
+      </div>
+      <input id="f_services" placeholder="Services comma separated: pos, kyc" class="w-full bg-[#f2f6f3] rounded-xl px-3 py-2.5 text-sm outline-none" />
+      <div class="flex gap-2">
+        <button id="pickBtn" class="flex-1 bg-ink text-white rounded-xl py-2.5 text-sm font-bold">Pick on map</button>
+        <button id="geoBtn" class="flex-1 bg-[#eef7f1] text-brand-700 rounded-xl py-2.5 text-sm font-bold">Use my GPS</button>
+      </div>
+      <button id="saveBtn" class="w-full bg-brand-500 text-white rounded-xl py-2.5 text-sm font-bold">Save provider</button>
+      <p class="text-[11px] text-gray-400">Coords auto-filled from Pick / GPS / map center. Server enforces roles.</p>
+      <div class="pt-2 mt-1 border-t border-[#eef3f0]">
+        <div class="text-sm font-bold">Bulk import <span class="text-[10px] font-bold text-brand-700 bg-brand-50 px-2 py-0.5 rounded-lg ml-1">CSV</span></div>
+        <p class="text-[11px] text-gray-400 mb-1.5">One per line: <b>name, email, phone, lat, lng, area, status, services;</b> e.g.<br><span class="font-mono">Jane Doe, j@x.co, 08030000000, 6.52, 3.38, Ikeja, available, pos;kyc</span></p>
+        <textarea id="csvBox" rows="3" placeholder="Paste rows here…" class="w-full bg-[#f2f6f3] rounded-xl px-3 py-2 text-xs outline-none font-mono"></textarea>
+        <button id="csvBtn" class="w-full mt-1.5 bg-ink text-white rounded-xl py-2.5 text-sm font-bold">Import CSV</button>
+      </div>
+    </div>
+    <div id="reqPane" class="hidden flex-1 overflow-y-auto p-4 space-y-2">
+      <div class="text-sm font-bold">Consumer request — auto-routed</div>
+      <input id="r_name" placeholder="Your name" class="w-full bg-[#f2f6f3] rounded-xl px-3 py-2.5 text-sm outline-none" />
+      <input id="r_phone" placeholder="Your phone" class="w-full bg-[#f2f6f3] rounded-xl px-3 py-2.5 text-sm outline-none" />
+      <textarea id="r_note" placeholder="What do you need? e.g. POS setup" class="w-full bg-[#f2f6f3] rounded-xl px-3 py-2.5 text-sm outline-none" rows="3"></textarea>
+      <div class="flex gap-2">
+        <button id="useCenter" class="flex-1 bg-[#eef7f1] text-brand-700 rounded-xl py-2 text-xs font-bold">Map center</button>
+        <button id="reqPick" class="flex-1 bg-[#eef7f1] text-brand-700 rounded-xl py-2 text-xs font-bold">Pick on map</button>
+      </div>
+      <button id="sendReq" class="w-full bg-brand-500 text-white rounded-xl py-2.5 text-sm font-bold">Find nearest available</button>
+      <div id="reqOut" class="text-sm bg-[#f7faf8] flat rounded-xl p-3 hidden"></div>
+    </div>
+    <div id="managePane" class="hidden flex-1 overflow-y-auto p-4 space-y-2">
+      <div class="text-sm font-bold">Manage <span class="text-[10px] text-gray-400">staff only</span></div>
+      <div id="miniStats" class="text-xs bg-[#f7faf8] flat rounded-xl p-3">Login as manager to see stats.</div>
+      <div class="grid grid-cols-2 gap-2 text-sm font-bold">
+        <button id="mStats" class="bg-[#f2f6f3] rounded-xl py-2.5">Stats</button>
+        <button id="mReqs" class="bg-[#f2f6f3] rounded-xl py-2.5">Requests</button>
+        <button id="mUsers" class="bg-[#f2f6f3] rounded-xl py-2.5">Users</button>
+        <button id="mAudit" class="bg-[#f2f6f3] rounded-xl py-2.5">Audit</button>
+      </div>
+      <button id="mListSnap" class="w-full bg-ink text-white rounded-xl py-2.5 text-sm font-bold">Open list as floating window</button>
+      <p class="text-[11px] text-gray-400">The map is your desktop — open dashboards from the taskbar, drag, resize, maximize.</p>
+    </div>
+  </div>
+  <div id="dashResize" class="rz rz-se" title="Resize"></div>
+</aside>
+
+<!-- taskbar -->
+<div id="taskbar">
+  <button id="dashMenuBtn" class="tbtn" style="font-weight:800">▦</button>
+  <button id="taskDashBtn" class="tbtn">Dashboard</button>
+  <button id="taskNewBtn" class="tbtn" title="Open a new dashboard window">+ New</button>
+  <div id="taskBtns" class="flex items-center gap-1 overflow-x-auto flex-1"></div>
+  <span id="tbUser" class="text-[11px] font-bold hidden md:inline" style="color:#cbd5d1">guest</span>
+  <span id="clock" class="text-[11px] font-bold" style="color:#cbd5d1">--:--</span>
+</div>
+
+<!-- bottom number-line strip -->
+<div id="strip" class="absolute z-[1000] left-4 right-4 flex justify-center pointer-events-none" style="bottom:48px">
+  <div class="pointer-events-auto w-full max-w-[1100px] bg-white flat shadow-card rounded-2xl px-4 pt-2 pb-3">
+    <div class="flex items-center gap-3 text-[11px] font-bold text-gray-500">
+      <span class="bg-ink text-white px-2 py-1 rounded-lg">WHERE AM I</span>
+      <span id="centerLabel" class="truncate">—</span>
+      <span class="flex-1"></span>
+      <span id="sliceLabel" class="text-brand-700">Tap a column to list that vertical slice</span>
+      <button id="resetSlice" class="px-2 py-1 rounded-lg bg-[#f2f6f3]">Reset</button>
+    </div>
+    <div id="bars" class="flex items-end gap-1.5 h-[64px] mt-2"></div>
+    <div class="flex justify-between text-[10px] text-gray-400 font-semibold mt-1"><span id="westLbl">W</span><span>longitude slices →</span><span id="eastLbl">E</span></div>
+  </div>
+</div>
+
+<!-- auth modal -->
+<div id="authModal" class="hidden fixed inset-0 z-[2000] bg-black/30 flex items-center justify-center p-4">
+  <div class="bg-white rounded-2xl flat shadow-card w-full max-w-[360px] p-5">
+    <div class="font-extrabold text-lg">Welcome to Atlas</div>
+    <div class="text-xs text-gray-500 mb-3">JWT auth • roles: admin / manager / provider / consumer</div>
+    <input id="a_name" placeholder="Name (register only)" class="w-full bg-[#f2f6f3] rounded-xl px-3 py-2.5 text-sm outline-none mb-2" />
+    <input id="a_email" placeholder="Email" class="w-full bg-[#f2f6f3] rounded-xl px-3 py-2.5 text-sm outline-none mb-2" />
+    <input id="a_pass" type="password" placeholder="Password (min 6)" class="w-full bg-[#f2f6f3] rounded-xl px-3 py-2.5 text-sm outline-none mb-3" />
+    <div class="flex gap-2">
+      <button id="loginBtn" class="flex-1 bg-ink text-white rounded-xl py-2.5 text-sm font-bold">Login</button>
+      <button id="regBtn" class="flex-1 bg-brand-500 text-white rounded-xl py-2.5 text-sm font-bold">Register</button>
+    </div>
+    <div class="text-[11px] text-gray-500 mt-3 bg-[#f7faf8] flat rounded-xl p-2.5">Seed logins:<br><b>admin@atlas.local / admin123</b> (admin)<br><b>manager@atlas.local / manager123</b> (manager)<br><b>provider@atlas.local / provider123</b> (own record only)</div>
+    <div class="mt-3 pt-3 border-t border-[#eef3f0]">
+      <div class="text-xs font-bold mb-1.5">Change password <span class="text-gray-400 font-semibold">(logged in)</span></div>
+      <div class="flex gap-2">
+        <input id="p_old" type="password" placeholder="Current" class="flex-1 min-w-0 bg-[#f2f6f3] rounded-xl px-3 py-2 text-sm outline-none" />
+        <input id="p_new" type="password" placeholder="New (6+)" class="flex-1 min-w-0 bg-[#f2f6f3] rounded-xl px-3 py-2 text-sm outline-none" />
+        <button id="pwBtn" class="bg-ink text-white rounded-xl px-3 text-sm font-bold shrink-0">Set</button>
+      </div>
+    </div>
+    <button id="authClose" class="w-full mt-2 text-xs text-gray-400 font-bold py-1">Close</button>
+  </div>
+</div>
+
+<div id="toast" class="fixed z-[3000] left-1/2 -translate-x-1/2 bottom-[120px] hidden bg-ink text-white text-sm font-semibold px-4 py-2.5 rounded-xl shadow-card"></div>
+
+<script>
+/* ============ state ============ */
+let map, markers={}, providers=[], filtered=[], activeSlice=-1;
+let statusFilter='all', query='', areaFilter='all';
+let token=localStorage.getItem('atlas_token')||'', user=null;
+let canManage=false, isAdmin=false, picking=null, wide=false;
+let drawMode=null, drawers={}, drawnLayer=null, freehandPts=[], freehandLine=null, freehandOn=false;
+let zTop=1002, winSeq=0; const wins={};
+let reqPickMode=false;
+
+const statusColor = s => s==='available' ? '#00b578' : s==='busy' ? '#f59e0b' : '#98a2b3';
+const toast = m => { const t=document.getElementById('toast'); t.textContent=m; t.classList.remove('hidden'); clearTimeout(t._h); t._h=setTimeout(()=>t.classList.add('hidden'),2400); };
+const authH = () => token ? {'Authorization':'Bearer '+token} : {};
+const esc = s => String(s??'').replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+async function api(path, opts={}){
+  const r = await fetch(path,{headers:{'Content-Type':'application/json',...authH()},...opts});
+  if(r.status===401 && token){ logout(true); throw new Error('session expired'); }
+  if(!r.ok) throw new Error((await r.text()).slice(0,200));
+  return r.json();
+}
+
+/* ============ desktop window manager v2: drag, resize, maximize, snap, taskbar ============ */
+const APPS=[['providers','◉ Providers'],['board','☰ Team board'],['stats','▦ Stats'],['inbox','✉ Requests'],['users','⚙ Users'],['audit','≣ Audit'],['draw','⬡ Draw results']];
+const TASKBAR_H=36;
+let focusId=null, lastDraw=null;
+function snapEl(){
+  let s=document.getElementById('snapPreview');
+  if(!s){ s=document.createElement('div'); s.id='snapPreview'; document.getElementById('winLayer').appendChild(s); }
+  return s;
+}
+function spawnWindow(title, bodyEl, opts={}){
+  const id='w'+(++winSeq);
+  const el=document.createElement('div');
+  el.className='win'; el.id=id;
+  const vw=innerWidth, vh=innerHeight, w=opts.w??360;
+  el.style.left=(opts.x ?? Math.max(8,(150+(winSeq*36)%Math.max(80,vw-560))))+'px';
+  el.style.top=(opts.y ?? Math.max(8,(110+(winSeq*28)%Math.max(80,vh-420))))+'px';
+  el.style.width=w+'px';
+  if(opts.h) el.style.height=opts.h+'px'; else el.style.maxHeight=(vh-140)+'px';
+  el.style.zIndex=++zTop;
+  el.innerHTML=`<div class="winHead"><button class="wbtn wapp" title="Change view">≡</button><span class="wtitle">${esc(title)}</span><button class="wbtn wmin" title="Minimize">–</button><button class="wbtn wmax" title="Maximize / restore">▢</button><button class="wbtn wcls" title="Close">✕</button></div><div class="wbody"></div><div class="rz rz-e"></div><div class="rz rz-s"></div><div class="rz rz-se"></div>`;
+  el.querySelector('.wbody').appendChild(bodyEl);
+  document.getElementById('winLayer').appendChild(el);
+  wins[id]={el,title,app:opts.app||'',arg:opts.arg||null,min:false,max:false,prev:null};
+  wireHead(id); wireResize(id);
+  el.addEventListener('pointerdown',()=>focusWin(id),true);
+  el.querySelector('.wcls').onclick=e=>{e.stopPropagation();closeWin(id);};
+  el.querySelector('.wmin').onclick=e=>{e.stopPropagation();minWin(id);};
+  el.querySelector('.wmax').onclick=e=>{e.stopPropagation();toggleMax(id);};
+  el.querySelector('.wapp').onclick=e=>{e.stopPropagation();openAppMenu(id,e.clientX,e.clientY);};
+  focusWin(id); renderTasks();
+  return id;
+}
+function focusWin(id){ const w=wins[id]; if(!w)return; focusId=id; w.el.style.zIndex=++zTop;
+  Object.values(wins).forEach(o=>o.el.classList.remove('focused')); w.el.classList.add('focused'); renderTasks(); }
+function minWin(id){ const w=wins[id]; if(!w||w.min)return; w.min=true; w.el.style.display='none'; if(focusId===id)focusId=null; renderTasks(); }
+function restoreWin(id){ const w=wins[id]; if(!w)return; w.min=false; w.el.style.display='flex'; focusWin(id); renderTasks(); }
+function closeWin(id){ const w=wins[id]; if(!w)return; w.el.remove(); delete wins[id]; if(focusId===id)focusId=null; renderTasks(); }
+function setWinBody(id, node){
+  const w=wins[id]; if(!w)return;
+  const b=w.el.querySelector('.wbody'); b.innerHTML=''; b.appendChild(node);
+  if(w.min){ w.min=false; w.el.style.display='flex'; } focusWin(id); renderTasks();
+}
+function setWinTitle(id, title){ const w=wins[id]; if(!w)return; w.title=title; w.el.querySelector('.wtitle').textContent=title; renderTasks(); }
+function toggleMax(id){
+  const w=wins[id]; if(!w)return;
+  if(!w.max){ w.prev={l:w.el.style.left,t:w.el.style.top,w:w.el.style.width,h:w.el.style.height,mh:w.el.style.maxHeight};
+    w.el.style.left='0px'; w.el.style.top='0px'; w.el.style.width=innerWidth+'px';
+    w.el.style.height=(innerHeight-TASKBAR_H)+'px'; w.el.style.maxHeight='none'; w.max=true;
+    w.el.querySelector('.wmax').textContent='❐';
+  } else { const p=w.prev||{}; w.el.style.left=p.l||'120px'; w.el.style.top=p.t||'100px';
+    w.el.style.width=p.w||'360px'; w.el.style.height=p.h||''; w.el.style.maxHeight=p.mh||''; w.max=false;
+    w.el.querySelector('.wmax').textContent='▢'; }
+  focusWin(id);
+}
+/* smooth drag: pointer capture + rAF, clamped, top-edge snap, dblclick = maximize */
+function wireHead(id){
+  const w=wins[id], head=w.el.querySelector('.winHead');
+  let sx=0,sy=0,ox=0,oy=0,on=false,raf=0,lx=0,ly=0,snap=false;
+  const move=()=>{ raf=0; if(!on)return;
+    const nx=Math.min(Math.max(ox+lx-sx,-w.el.offsetWidth+120),innerWidth-80);
+    const ny=Math.max(0,oy+ly-sy);
+    w.el.style.left=nx+'px'; w.el.style.top=ny+'px';
+    snap=(ly<=4); const s=snapEl();
+    if(snap){ s.style.display='block'; s.style.left='0px'; s.style.top='0px'; s.style.width=innerWidth+'px'; s.style.height=(innerHeight-TASKBAR_H)+'px'; }
+    else s.style.display='none';
+  };
+  head.addEventListener('pointerdown',e=>{
+    if(e.target.closest('button')||e.target.closest('.wmenu'))return;
+    if(w.max) return; // drag a maximized window via restore: dblclick header first
+    on=true; sx=e.clientX; sy=e.clientY; ox=w.el.offsetLeft; oy=w.el.offsetTop; lx=sx; ly=sy;
+    try{head.setPointerCapture(e.pointerId);}catch{}
+    w.el.classList.add('dragging-win'); focusWin(id); e.preventDefault();
+  });
+  head.addEventListener('pointermove',e=>{ if(!on)return; lx=e.clientX; ly=e.clientY; if(!raf)raf=requestAnimationFrame(move); });
+  const end=e=>{ if(!on)return; on=false; w.el.classList.remove('dragging-win'); snapEl().style.display='none';
+    if(snap){ snap=false; if(!w.max)toggleMax(id); } snap=false; };
+  head.addEventListener('pointerup',end); head.addEventListener('pointercancel',end);
+  head.addEventListener('dblclick',e=>{ if(!e.target.closest('button'))toggleMax(id); });
+}
+/* resize from E / S / SE edges, un-maximizes first like a real desktop */
+function wireResize(id){
+  const w=wins[id];
+  w.el.querySelectorAll('.rz').forEach(h=>{
+    let sx=0,sy=0,ow=0,oh=0,on=false,raf=0,lx=0,ly=0; const dir=h.classList.contains('rz-e')?'e':h.classList.contains('rz-s')?'s':'se';
+    const move=()=>{ raf=0; if(!on)return;
+      if(dir==='e'||dir==='se') w.el.style.width=Math.min(Math.max(ow+lx-sx,280),innerWidth-16)+'px';
+      if(dir==='s'||dir==='se'){ w.el.style.height=Math.max(oh+ly-sy,180)+'px'; w.el.style.maxHeight='none'; } };
+    h.addEventListener('pointerdown',e=>{ if(w.max)toggleMax(id);
+      on=true; sx=e.clientX; sy=e.clientY; ow=w.el.offsetWidth; oh=w.el.offsetHeight; lx=sx; ly=sy;
+      try{h.setPointerCapture(e.pointerId);}catch{} focusWin(id); e.preventDefault(); e.stopPropagation(); });
+    h.addEventListener('pointermove',e=>{ if(!on)return; lx=e.clientX; ly=e.clientY; if(!raf)raf=requestAnimationFrame(move); });
+    const end=()=>{on=false;}; h.addEventListener('pointerup',end); h.addEventListener('pointercancel',end);
+  });
+}
+function openAppMenu(id,x,y){
+  closeAppMenu();
+  const m=document.createElement('div'); m.className='wmenu'; m.id='wmenuOpen';
+  m.style.left=Math.min(x,innerWidth-210)+'px'; m.style.top=Math.max(8,y-4)+'px';
+  m.innerHTML=APPS.map(([k,l])=>`<button data-app="${k}">${l}</button>`).join('');
+  document.getElementById('winLayer').appendChild(m);
+  m.querySelectorAll('button').forEach(b=>b.onclick=()=>{ closeAppMenu(); renderApp(id,b.dataset.app); });
+  setTimeout(()=>document.addEventListener('pointerdown',closeAppMenu,{once:true}),0);
+}
+function closeAppMenu(){ document.getElementById('wmenuOpen')?.remove(); }
+/* taskbar */
+function dashVisible(){ const s=document.getElementById('sidebar'); return s && s.style.display!=='none'; }
+function renderTasks(){
+  const box=document.getElementById('taskBtns'); if(!box)return; box.innerHTML='';
+  const mk=(label,active,min,fn)=>{ const b=document.createElement('button');
+    b.className='tbtn'+(active?' tactive':'')+(min?' tmin':''); b.textContent=label; b.title=label; b.onclick=fn; box.appendChild(b); };
+  mk('◈ Dashboard', dashVisible()&&!focusId, !dashVisible(), toggleDash);
+  Object.entries(wins).forEach(([id,w])=>mk(w.title, focusId===id, w.min, ()=>{
+    if(w.min)restoreWin(id); else if(focusId===id)minWin(id); else focusWin(id); }));
+  const u=document.getElementById('tbUser'); if(u)u.textContent=user?user.name+' • '+user.role:'guest';
+}
+function tickClock(){ const d=new Date(),p=n=>String(n).padStart(2,'0');
+  const c=document.getElementById('clock'); if(c)c.textContent=p(d.getHours())+':'+p(d.getMinutes()); }
+setInterval(tickClock,15000);
+
+/* ============ map ============ */
+function initMap(){
+  map = L.map('map',{zoomControl:false}).setView([6.52,3.38], 11);
+  L.control.zoom({position:'bottomright'}).addTo(map);
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OpenStreetMap contributors'}).addTo(map);
+  map.on('moveend zoomend', renderStrip);
+  map.on('click', e=>{
+    if(picking==='add'){ document.getElementById('f_lat').value=e.latlng.lat.toFixed(5); document.getElementById('f_lng').value=e.latlng.lng.toFixed(5); picking=null; toast('Location picked'); }
+    else if(picking==='req'||reqPickMode){ reqPickMode=false; picking=null; pendingReqLoc=e.latlng; toast('Request location: '+e.latlng.lat.toFixed(3)+', '+e.latlng.lng.toFixed(3)); }
+  });
+  const el = document.getElementById('map');
+  el.addEventListener('dragover', e=>e.preventDefault());
+  el.addEventListener('drop', async e=>{
+    e.preventDefault();
+    const id = e.dataTransfer.getData('text/provider-id');
+    if(!id || !canManage) return toast('Manager login required to re-assign');
+    const ll = map.containerPointToLatLng(map.mouseEventToContainerPoint(e));
+    await patchProvider(id,{lat:+ll.lat.toFixed(5), lng:+ll.lng.toFixed(5)});
+    toast('Re-assigned to dropped location');
+  });
+  drawnLayer=new L.FeatureGroup(); map.addLayer(drawnLayer);
+  drawers.polygon=new L.Draw.Polygon(map,{shapeOptions:{color:'#00b578',weight:2}});
+  drawers.rectangle=new L.Draw.Rectangle(map,{shapeOptions:{color:'#00b578',weight:2}});
+  drawers.circle=new L.Draw.Circle(map,{shapeOptions:{color:'#00b578',weight:2}});
+  map.on(L.Draw.Event.CREATED, e=>{ setDrawMode(null); addShape(e.layer); });
+  wireFreehand();
+}
+
+/* ============ providers ============ */
+async function load(){
+  const p = new URLSearchParams({q:query,status:statusFilter,area:areaFilter});
+  providers = await api('/api/providers?'+p.toString());
+  filtered = activeSlice>=0 ? providers.filter(inSlice) : providers;
+  renderMarkers(); renderList(); renderStrip(); fillAreas(); refreshMiniStats();
+  Object.entries(wins).forEach(([id,w])=>{ if(w.app==='providers'&&w.repaint&&!w.min) w.repaint(); });
+}
+async function fillAreas(){
+  const sel=document.getElementById('areaSel'); const cur=sel.value||'all';
+  try{ const areas=await api('/api/areas'); sel.innerHTML='<option value="all">All areas</option>'+areas.map(a=>`<option>${esc(a)}</option>`).join(''); sel.value=[...sel.options].some(o=>o.value===cur)?cur:'all'; }catch{}
+}
+function iconFor(p){
+  return L.divIcon({className:'',html:`<div class="pin" style="background:${statusColor(p.status)}">${esc((p.name||'•').trim()[0].toUpperCase())}</div>`,iconSize:[26,26],iconAnchor:[13,13]});
+}
+function renderMarkers(){
+  Object.values(markers).forEach(m=>map.removeLayer(m)); markers={};
+  filtered.forEach(p=>{
+    const own = user && user.role==='provider' && user.provider_id===p.id;
+    const m=L.marker([p.lat,p.lng],{icon:iconFor(p),draggable:canManage||own,title:String(p.name)});
+    m.on('click',()=>showDetail(p.id));
+    m.on('dragend',async()=>{ const ll=m.getLatLng(); await patchProvider(p.id,{lat:+ll.lat.toFixed(5),lng:+ll.lng.toFixed(5)}); });
+    m.addTo(map); markers[p.id]=m;
+  });
+}
+function renderList(){
+  const box=document.getElementById('list');
+  document.getElementById('count').textContent=filtered.length;
+  if(!filtered.length){box.innerHTML='<div class="text-sm text-gray-400 p-4 text-center">No providers here. Try reset or another slice.</div>';return;}
+  box.innerHTML=filtered.map(p=>`
+    <div draggable="${canManage}" data-id="${p.id}" class="prov flat rounded-2xl p-3 bg-white hover:border-brand-500 cursor-pointer">
+      <div class="flex items-center gap-2">
+        <div class="w-9 h-9 rounded-xl flex items-center justify-center text-white font-extrabold" style="background:${statusColor(p.status)}">${esc(p.name[0])}</div>
+        <div class="min-w-0 flex-1">
+          <div class="font-bold text-sm truncate">${esc(p.name)}</div>
+          <div class="text-[11px] text-gray-500 truncate">${esc(p.area||'—')} • ${esc(p.services.join(', ')||'general')}</div>
+        </div>
+        <span class="text-[10px] font-extrabold uppercase px-2 py-1 rounded-lg" style="background:${statusColor(p.status)}1a;color:${statusColor(p.status)}">${esc(p.status)}</span>
+      </div>
+      <div class="text-[11px] text-gray-400 mt-1 truncate">${esc(p.phone||'')} ${p.email?'• '+esc(p.email):''}</div>
+    </div>`).join('');
+  box.querySelectorAll('.prov').forEach(el=>{
+    el.addEventListener('click',()=>showDetail(el.dataset.id));
+    el.addEventListener('dragstart',e=>{e.dataTransfer.setData('text/provider-id',el.dataset.id);el.classList.add('dragging');});
+    el.addEventListener('dragend',()=>el.classList.remove('dragging'));
+  });
+}
+const NB=12;
+function bounds(){ return map.getBounds(); }
+function inSlice(p){
+  if(activeSlice<0) return true;
+  const b=bounds(), w=b.getWest(), e=b.getEast(), step=(e-w)/NB;
+  return p.lng>=w+activeSlice*step && p.lng<w+(activeSlice+1)*step;
+}
+function renderStrip(){
+  if(!map) return;
+  const b=bounds(), w=b.getWest(), e=b.getEast(), step=(e-w)/NB;
+  document.getElementById('westLbl').textContent=w.toFixed(2)+'°';
+  document.getElementById('eastLbl').textContent=e.toFixed(2)+'°';
+  const c=map.getCenter();
+  const near=[...providers].sort((a,b2)=>Math.hypot(a.lat-c.lat,a.lng-c.lng)-Math.hypot(b2.lat-c.lat,b2.lng-c.lng))[0];
+  document.getElementById('centerLabel').textContent=`center ${c.lat.toFixed(3)}, ${c.lng.toFixed(3)}${near?' • near '+(near.area||near.name):''}`;
+  const counts=Array(NB).fill(0);
+  providers.forEach(p=>{ let i=Math.floor((p.lng-w)/step); if(i>=0&&i<NB) counts[i]++; });
+  const mx=Math.max(1,...counts);
+  const bars=document.getElementById('bars'); bars.innerHTML='';
+  counts.forEach((n,i)=>{
+    const h=10+Math.round(48*n/mx);
+    const d=document.createElement('div');
+    d.className='bar flex-1'+(i===activeSlice?' outline outline-2 outline-brand-500':'');
+    d.style.height=h+'px'; d.style.background=i===activeSlice?'#101828':(n?'#00b578':'#e3eae6');
+    d.title=`slice ${i+1}: ${n} providers`;
+    d.innerHTML=`<div class="text-[10px] font-extrabold text-center ${i===activeSlice?'text-white':n?'text-white':'text-gray-400'}" style="line-height:${h}px">${n||''}</div>`;
+    d.onclick=()=>{ activeSlice=(activeSlice===i?-1:i);
+      document.getElementById('sliceLabel').textContent=activeSlice<0?'Tap a column to list that vertical slice':`Slice ${activeSlice+1} • ${counts[activeSlice]} providers • ${(w+activeSlice*step).toFixed(2)}° → ${(w+(activeSlice+1)*step).toFixed(2)}°`;
+      load(); };
+    bars.appendChild(d);
+  });
+}
+function canEdit(p){ if(canManage) return true; return user && user.role==='provider' && user.provider_id===p.id; }
+async function patchProvider(id,body){
+  try{ await api('/api/providers/'+id,{method:'PATCH',body:JSON.stringify(body)}); await load();
+    Object.entries(wins).forEach(([wid,w])=>{
+      if(w.app==='detail'&&w.arg&&w.arg.pid===id) renderApp(wid,'detail',w.arg);
+      if(w.app==='providers') renderApp(wid,'providers');
+    });
+  }
+  catch(e){ toast('Not allowed for your role — login as manager'); }
+}
+function detailNode(p){
+  const editable=canEdit(p);
+  const d=document.createElement('div');
+  d.innerHTML=`
+    <div class="flex items-center gap-3">
+      <div class="w-11 h-11 rounded-2xl text-white flex items-center justify-center font-extrabold text-lg" style="background:${statusColor(p.status)}">${esc(p.name[0])}</div>
+      <div class="flex-1 min-w-0"><div class="font-extrabold truncate">${esc(p.name)}</div><div class="text-xs text-gray-500">${esc(p.area||'—')} • ${p.lat.toFixed(4)}, ${p.lng.toFixed(4)}</div></div>
+    </div>
+    <div class="text-xs text-gray-500 mt-2">${esc(p.email||'')}<br>${esc(p.phone||'')}</div>
+    <div class="text-xs mt-1">Services: <b>${esc(p.services.join(', ')||'general')}</b></div>
+    <div class="grid grid-cols-3 gap-1.5 mt-3">
+      ${['available','busy','closed'].map(s=>`<button data-s="${s}" class="stBtn text-[11px] font-extrabold uppercase rounded-xl py-2 ${p.status===s?'bg-ink text-white':'bg-[#f2f6f3]'}" ${editable?'':'disabled'} style="${editable?'':'opacity:.5'}">${s}</button>`).join('')}
+    </div>
+    <div class="flex gap-2 mt-2">
+      <button class="flyBtn flex-1 bg-[#eef7f1] text-brand-700 rounded-xl py-2 text-xs font-bold">Zoom to</button>
+      ${isAdmin?'<button class="delBtn flex-1 bg-red-50 text-red-600 rounded-xl py-2 text-xs font-bold">Remove</button>':''}
+    </div>
+    <div class="text-[11px] text-gray-400 mt-2">${editable?'Status editable. Drag the map pin or drag this provider from a list onto the map to relocate.':'Read-only for your role.'}</div>`;
+  d.querySelectorAll('.stBtn').forEach(b=>b.onclick=()=>patchProvider(p.id,{status:b.dataset.s}));
+  d.querySelector('.flyBtn').onclick=()=>map.flyTo([p.lat,p.lng],14);
+  const del=d.querySelector('.delBtn'); if(del) del.onclick=async()=>{ if(confirm('Remove '+p.name+'?')){ try{await api('/api/providers/'+p.id,{method:'DELETE'}); if(detailWin)closeWin(detailWin); load();}catch{toast('Admin only');} } };
+  return d;
+}
+async function providerById(id){
+  let p=providers.find(x=>x.id===id); if(p) return p;
+  try{ const all=await api('/api/providers'); p=all.find(x=>x.id===id); }catch{}
+  return p;
+}
+async function showDetail(id){
+  const p=await providerById(id); if(!p) return;
+  openAppWindow('detail',{pid:id});
+}
+
+/* ============ freehand + shapes ============ */
+function setDrawMode(m){
+  drawMode=m;
+  document.querySelectorAll('.drawBtn').forEach(b=>b.classList.toggle('tool-active', b.dataset.draw===m));
+  Object.values(drawers).forEach(d=>{ try{d.disable();}catch{} });
+  if(m==='polygon'){ drawers.polygon.enable(); toast('Polygon: click points, double-click to finish'); }
+  else if(m==='rectangle'){ drawers.rectangle.enable(); toast('Rectangle: drag on map'); }
+  else if(m==='circle'){ drawers.circle.enable(); toast('Circle: drag on map'); }
+  else if(m==='freehand'){ toast('Freehand: press + drag on the map'); }
+}
+function wireFreehand(){
+  const c=map.getContainer();
+  c.addEventListener('mousedown', e=>{
+    if(drawMode!=='freehand' || e.button!==0) return;
+    freehandOn=true; freehandPts=[map.mouseEventToLatLng(e)];
+    map.dragging.disable();
+    freehandLine=L.polyline(freehandPts,{color:'#00b578',weight:3}).addTo(map);
+    e.preventDefault();
+  });
+  c.addEventListener('mousemove', e=>{
+    if(!freehandOn) return;
+    const ll=map.mouseEventToLatLng(e);
+    const last=freehandPts[freehandPts.length-1];
+    if(map.distance(last,ll) < 8) return;
+    freehandPts.push(ll); freehandLine.setLatLngs(freehandPts);
+  });
+  window.addEventListener('mouseup', ()=>{
+    if(!freehandOn) return;
+    freehandOn=false; map.dragging.enable();
+    if(freehandLine){ map.removeLayer(freehandLine); freehandLine=null; }
+    if(freehandPts.length>=8){ addShape(L.polygon(freehandPts)); }
+    else if(freehandPts.length>=3){ toast('Draw a bigger loop'); }
+    freehandPts=[]; setDrawMode(null);
+  });
+}
+function layerToPoly(layer){
+  if(layer instanceof L.Circle){
+    const c=layer.getLatLng(), r=layer.getRadius(), pts=[];
+    for(let i=0;i<48;i++){ const a=i/48*2*Math.PI; const dx=r*Math.cos(a), dy=r*Math.sin(a);
+      const dlat=dy/111320, dlng=dx/(111320*Math.cos(c.lat*Math.PI/180));
+      pts.push([c.lat+dlat, c.lng+dlng]); }
+    return pts;
+  }
+  let ll=layer.getLatLngs();
+  while(Array.isArray(ll) && Array.isArray(ll[0]) && typeof ll[0][0]!=='number' && ll[0][0]?.lat===undefined){ ll=ll[0]; }
+  const flat=Array.isArray(ll[0])?ll[0]:ll;
+  return flat.map(p=>Array.isArray(p)?[p[0],p[1]]:[p.lat,p.lng]);
+}
+function polyStats(poly){
+  const lats=poly.map(p=>p[0]), lngs=poly.map(p=>p[1]);
+  const N=Math.max(...lats), S=Math.min(...lats), E=Math.max(...lngs), W=Math.min(...lngs);
+  const lat0=(N+S)/2, kx=111320*Math.cos(lat0*Math.PI/180), ky=110540;
+  let a=0; for(let i=0;i<poly.length;i++){ const [y1,x1]=poly[i], [y2,x2]=poly[(i+1)%poly.length]; a+=(x1*kx)*(y2*ky)-(x2*kx)*(y1*ky); }
+  const areaKm2=Math.abs(a/2)/1e6;
+  let per=0; for(let i=0;i<poly.length;i++){ const A=poly[i],B=poly[(i+1)%poly.length];
+    const R=6371, dLa=(B[0]-A[0])*Math.PI/180, dLo=(B[1]-A[1])*Math.PI/180;
+    const s=Math.sin(dLa/2)**2+Math.cos(A[0]*Math.PI/180)*Math.cos(B[0]*Math.PI/180)*Math.sin(dLo/2)**2;
+    per+=2*R*Math.asin(Math.sqrt(s)); }
+  return {N,S,E,W,center:[(N+S)/2,(W+E)/2],areaKm2,perKm:per};
+}
+async function addShape(layer){
+  drawnLayer.clearLayers(); drawnLayer.addLayer(layer);
+  const poly=layerToPoly(layer);
+  const st=polyStats(poly);
+  map.fitBounds(drawnLayer.getBounds().pad(0.2));
+  let inside=[];
+  try{ inside=await api('/api/providers/within',{method:'POST',body:JSON.stringify({polygon:poly,status:statusFilter})}); }catch{ toast('Area search failed'); }
+  openDrawResults(st, inside);
+}
+function drawNode(){
+  const st=lastDraw?lastDraw.st:null, inside=lastDraw?lastDraw.inside:[];
+  const d=document.createElement('div');
+  if(!st){ d.innerHTML='<div class="text-sm text-gray-400">Draw on the map first — freehand, polygon, rectangle or circle.</div>'; return d; }
+  d.innerHTML=`
+    <div class="text-xs font-bold text-gray-500">BOUNDARY</div>
+    <div class="text-sm font-extrabold">N ${st.N.toFixed(4)} • S ${st.S.toFixed(4)}<br>W ${st.W.toFixed(4)} • E ${st.E.toFixed(4)}</div>
+    <div class="grid grid-cols-3 gap-1.5 mt-2 text-center">
+      <div class="bg-[#f2f6f3] rounded-xl p-2"><div class="text-[10px] font-bold text-gray-400">AREA</div><div class="font-extrabold text-sm">${st.areaKm2.toFixed(2)} km²</div></div>
+      <div class="bg-[#f2f6f3] rounded-xl p-2"><div class="text-[10px] font-bold text-gray-400">EDGE</div><div class="font-extrabold text-sm">${st.perKm.toFixed(2)} km</div></div>
+      <div class="bg-brand-50 rounded-xl p-2"><div class="text-[10px] font-bold text-brand-700">INSIDE</div><div class="font-extrabold text-sm text-brand-700">${inside.length}</div></div>
+    </div>
+    <div class="text-xs font-bold text-gray-500 mt-3 mb-1">PROVIDERS IN AREA (${inside.length})</div>
+    <div class="space-y-1.5 max-h-[220px] overflow-y-auto">${inside.map(p=>`
+      <button data-id="${p.id}" class="goProv w-full text-left flat rounded-xl p-2 hover:border-brand-500 flex items-center gap-2">
+        <span class="w-3 h-3 rounded-full shrink-0" style="background:${statusColor(p.status)}"></span>
+        <span class="min-w-0"><span class="block text-[13px] font-bold truncate">${esc(p.name)}</span>
+        <span class="block text-[11px] text-gray-500">${esc(p.area||'—')} • ${esc(p.status)}</span></span>
+      </button>`).join('') || '<div class="text-xs text-gray-400">Nobody in this boundary.</div>'}</div>`;
+  d.querySelectorAll('.goProv').forEach(b=>b.onclick=()=>{ const p=inside.find(x=>x.id===b.dataset.id); if(p){ map.flyTo([p.lat,p.lng],14); showDetail(p.id);} });
+  return d;
+}
+function openDrawResults(st, inside){
+  lastDraw={st,inside};
+  openAppWindow('draw');
+}
+
+/* ============ manage windows ============ */
+async function refreshMiniStats(){
+  const box=document.getElementById('miniStats'); if(!box) return;
+  if(!canManage){ box.textContent='Login as manager to see stats.'; return; }
+  try{ const s=await api('/api/stats');
+    box.innerHTML=`<b>${s.total}</b> providers • <b>${s.requests}</b> requests<br>`+
+      Object.entries(s.by_status).map(([k,v])=>`${k}: <b>${v}</b>`).join(' • ');
+  }catch{ box.textContent='Stats unavailable.'; }
+}
+/* ============ window apps: any window can host any view ============ */
+async function renderApp(id, app, arg){
+  const w=wins[id]; if(!w)return;
+  w.app=app; w.arg=arg||null;
+  const titles={providers:'Providers',board:'Team board',stats:'Stats',inbox:'Requests inbox',users:'Users & roles',audit:'Audit log',draw:'Draw results',detail:'Provider'};
+  setWinTitle(id, titles[app]||'Dashboard');
+  const loading=document.createElement('div'); loading.className='text-sm text-gray-400'; loading.textContent='Loading…';
+  setWinBody(id, loading);
+  try{
+    let node=null;
+    if(app==='providers') node=providersWinNode(id);
+    else if(app==='stats') node=await statsNode();
+    else if(app==='inbox') node=await inboxNode(id);
+    else if(app==='users') node=await usersNode(id);
+    else if(app==='audit') node=await auditNode();
+    else if(app==='board') node=boardNode(id);
+    else if(app==='draw') node=drawNode();
+    else if(app==='detail'){
+      const p=await providerById(arg&&arg.pid);
+      if(p){ node=detailNode(p); setWinTitle(id,p.name); } else { node=document.createElement('div'); node.className='text-sm text-gray-400'; node.textContent='Provider not found.'; }
+    }
+    if(node) setWinBody(id, node);
+  }catch(e){ const er=document.createElement('div'); er.className='text-sm text-gray-400'; er.textContent='Could not load — '+(String(e.message||e)).slice(0,80); setWinBody(id,er); }
+}
+function openAppWindow(app, arg, opts={}){
+  const titles={providers:'Providers',board:'Team board',stats:'Stats',inbox:'Requests inbox',users:'Users & roles',audit:'Audit log',draw:'Draw results',detail:'Provider'};
+  const tmp=document.createElement('div'); tmp.className='text-sm text-gray-400'; tmp.textContent='Loading…';
+  const id=spawnWindow(titles[app]||'Dashboard', tmp, {w:opts.w??360, x:opts.x, y:opts.y, app, arg:arg||null});
+  renderApp(id, app, arg||null);
+  return id;
+}
+function providersWinNode(id){
+  const d=document.createElement('div');
+  d.innerHTML=`<input class="pwQ w-full bg-[#f2f6f3] px-3 py-2 text-sm outline-none mb-2" style="border-radius:0" placeholder="Filter this window…" />
+    <div class="pwN text-[11px] font-bold text-gray-500 mb-1"></div>
+    <div class="pwL space-y-1.5 max-h-[50vh] overflow-y-auto"></div>`;
+  const paint=(q)=>{
+    const list=filtered.filter(p=>!q||(p.name+' '+(p.area||'')+' '+p.services.join(' ')).toLowerCase().includes(q.toLowerCase()));
+    d.querySelector('.pwN').textContent=list.length+' providers (live)';
+    d.querySelector('.pwL').innerHTML=list.map(p=>`<button data-id="${p.id}" class="goP w-full text-left flat p-2 hover:border-brand-500 flex items-center gap-2" style="border-radius:0"><span class="w-3 h-3 rounded-full shrink-0" style="background:${statusColor(p.status)}"></span><span class="text-[13px] font-bold truncate">${esc(p.name)}</span><span class="flex-1"></span><span class="text-[10px] text-gray-400">${esc(p.area||'')}</span></button>`).join('')||'<div class="text-xs text-gray-400">Empty.</div>';
+    d.querySelectorAll('.goP').forEach(b=>b.onclick=()=>{ const p=list.find(x=>x.id===b.dataset.id); if(p){ map.flyTo([p.lat,p.lng],14); showDetail(p.id);} });
+  };
+  d.querySelector('.pwQ').oninput=e=>paint(e.target.value);
+  paint('');
+  if(wins[id]) wins[id].repaint=()=>paint(d.querySelector('.pwQ').value);
+  return d;
+}
+async function statsNode(){
+  const s=await api('/api/stats');
+  const d=document.createElement('div');
+  const mx=Math.max(1,...Object.values(s.by_status),...Object.values(s.by_area));
+  d.innerHTML=`
+    <div class="grid grid-cols-2 gap-2 text-center">
+      <div class="bg-[#f2f6f3] rounded-xl p-3"><div class="text-[10px] font-bold text-gray-400">PROVIDERS</div><div class="text-2xl font-black">${s.total}</div></div>
+      <div class="bg-brand-50 rounded-xl p-3"><div class="text-[10px] font-bold text-brand-700">REQUESTS</div><div class="text-2xl font-black text-brand-700">${s.requests}</div></div>
+    </div>
+    <div class="text-xs font-bold text-gray-500 mt-3">BY STATUS</div>
+    ${Object.entries(s.by_status).map(([k,v])=>`<div class="flex items-center gap-2 text-xs mt-1"><span class="w-16 font-bold">${esc(k)}</span><div class="flex-1 bg-[#f2f6f3] rounded-lg h-3"><div class="h-3 rounded-lg" style="width:${Math.round(v/mx*100)}%;background:${statusColor(k)}"></div></div><b>${v}</b></div>`).join('')}
+    <div class="text-xs font-bold text-gray-500 mt-3">BY AREA</div>
+    <div class="max-h-[180px] overflow-y-auto">${Object.entries(s.by_area).sort((a,b)=>b[1]-a[1]).map(([k,v])=>`<div class="flex items-center gap-2 text-xs mt-1"><span class="w-24 truncate font-bold">${esc(k)}</span><div class="flex-1 bg-[#f2f6f3] rounded-lg h-3"><div class="h-3 rounded-lg bg-ink" style="width:${Math.round(v/mx*100)}%"></div></div><b>${v}</b></div>`).join('')}</div>
+    <div class="text-xs font-bold text-gray-500 mt-3">RECENT ACTIVITY</div>
+    <div class="text-[11px] text-gray-500 space-y-1 mt-1">${s.recent.map(r=>`<div>• <b>${esc(r.actor)}</b> ${esc(r.action)} → ${esc(r.target)}</div>`).join('')||'—'}</div>`;
+  return d;
+}
+async function inboxNode(winId){
+  if(!canManage){ const t=document.createElement('div'); t.className='text-sm text-gray-400'; t.textContent='Manager login required.'; return t; }
+  const rows=await api('/api/requests');
+  const provs=await api('/api/providers');
+  const d=document.createElement('div');
+  d.innerHTML=`<div class="text-xs text-gray-500 mb-2">${rows.length} requests • accept / close / re-route</div>
+    <div class="space-y-2 max-h-[50vh] overflow-y-auto">${rows.map(r=>{ const ap=provs.find(p=>p.id===r.assigned); return `
+      <div class="flat rounded-xl p-2.5" data-rid="${r.id}">
+        <div class="flex items-center gap-2"><b class="text-sm">${esc(r.name)}</b><span class="text-[10px] font-bold uppercase px-2 py-0.5 rounded-lg bg-[#f2f6f3]">${esc(r.status)}</span><span class="flex-1"></span><span class="text-[11px] text-gray-400">#${r.id} • ${r.km}km</span></div>
+        <div class="text-[11px] text-gray-500">${esc(r.phone||'')} • ${esc(r.note||'')}</div>
+        <div class="text-[11px] mt-1">Assigned: <b>${esc(ap?.name||r.assigned||'—')}</b></div>
+        <div class="flex gap-1.5 mt-2">
+          <select class="rqSt text-[11px] bg-[#f2f6f3] rounded-lg px-2 py-1.5">${['routed','accepted','done','closed'].map(s=>`<option ${r.status===s?'selected':''}>${s}</option>`).join('')}</select>
+          <select class="rqAs text-[11px] bg-[#f2f6f3] rounded-lg px-2 py-1.5 max-w-[130px]"><option value="">keep provider</option>${provs.map(p=>`<option value="${p.id}" ${r.assigned===p.id?'selected':''}>${esc(p.name)}</option>`).join('')}</select>
+          <button class="rqGo text-[11px] bg-[#eef7f1] text-brand-700 font-bold rounded-lg px-2">Map</button>
+          <button class="rqSave text-[11px] bg-ink text-white font-bold rounded-lg px-2.5">Save</button>
+        </div>
+      </div>`;}).join('')||'<div class="text-xs text-gray-400">No requests yet — send one from the Request tab.</div>'}</div>`;
+  d.querySelectorAll('[data-rid]').forEach(card=>{
+    const rid=card.dataset.rid;
+    card.querySelector('.rqGo').onclick=()=>{ const r=rows.find(x=>x.id==rid); if(r) map.flyTo([r.lat,r.lng],14); };
+    card.querySelector('.rqSave').onclick=async()=>{
+      const body={status:card.querySelector('.rqSt').value};
+      const as=card.querySelector('.rqAs').value; if(as) body.assigned_provider_id=as;
+      await api('/api/requests/'+rid,{method:'PATCH',body:JSON.stringify(body)}); toast('Request #'+rid+' updated'); renderApp(winId,'inbox');
+    };
+  });
+  return d;
+}
+async function usersNode(winId){
+  if(!canManage){ const t=document.createElement('div'); t.className='text-sm text-gray-400'; t.textContent='Manager login required.'; return t; }
+  const rows=await api('/api/users');
+  const d=document.createElement('div');
+  d.innerHTML=`<div class="text-xs text-gray-500 mb-2">${rows.length} users ${isAdmin?'(admin can edit roles)':'(read-only — admin only edits)'}</div>
+    <div class="space-y-2 max-h-[50vh] overflow-y-auto">${rows.map(u=>`
+      <div class="flat rounded-xl p-2.5" data-uid="${u.id}">
+        <div class="flex items-center gap-2"><b class="text-sm truncate">${esc(u.name||u.email)}</b><span class="flex-1"></span><span class="text-[10px] font-bold uppercase px-2 py-0.5 rounded-lg ${u.is_active?'bg-brand-50 text-brand-700':'bg-red-50 text-red-600'}">${esc(u.role)}${u.is_active?'':' • off'}</span></div>
+        <div class="text-[11px] text-gray-500 truncate">${esc(u.email)}${u.provider_id?' • linked '+esc(u.provider_id):''}</div>
+        ${isAdmin?`<div class="flex gap-1.5 mt-2">
+          <select class="uRole text-[11px] bg-[#f2f6f3] rounded-lg px-2 py-1.5">${['admin','manager','provider','consumer'].map(r=>`<option ${u.role===r?'selected':''}>${r}</option>`).join('')}</select>
+          <input class="uProv text-[11px] bg-[#f2f6f3] rounded-lg px-2 py-1.5 w-full" placeholder="provider_id link" value="${esc(u.provider_id||'')}" />
+          <button class="uTog text-[11px] font-bold rounded-lg px-2 ${u.is_active?'bg-red-50 text-red-600':'bg-brand-50 text-brand-700'}">${u.is_active?'Off':'On'}</button>
+          <button class="uSave text-[11px] bg-ink text-white font-bold rounded-lg px-2.5">Save</button>
+        </div>`:''}
+      </div>`).join('')}</div>`;
+  if(isAdmin) d.querySelectorAll('[data-uid]').forEach(card=>{
+    const uid=card.dataset.uid, u=rows.find(x=>x.id==uid);
+    card.querySelector('.uTog').onclick=async()=>{ await api('/api/users/'+uid,{method:'PATCH',body:JSON.stringify({is_active:!u.is_active})}); toast('User updated'); renderApp(winId,'users'); };
+    card.querySelector('.uSave').onclick=async()=>{
+      await api('/api/users/'+uid,{method:'PATCH',body:JSON.stringify({role:card.querySelector('.uRole').value, provider_id:card.querySelector('.uProv').value.trim()})});
+      toast('User saved'); await loadMe(); renderApp(winId,'users');
+    };
+  });
+  return d;
+}
+async function auditNode(){
+  if(!canManage){ const t=document.createElement('div'); t.className='text-sm text-gray-400'; t.textContent='Manager login required.'; return t; }
+  const rows=await api('/api/audit');
+  const d=document.createElement('div');
+  d.innerHTML=`<div class="space-y-1.5 max-h-[50vh] overflow-y-auto text-[11px]">${rows.map(r=>`<div class="flat px-2.5 py-1.5" style="border-radius:0"><b>${esc(r.actor)}</b> <span class="font-bold text-brand-700">${esc(r.action)}</span> → ${esc(r.target)} <span class="text-gray-400">${esc((r.meta||'').slice(0,80))}</span></div>`).join('')||'—'}</div>`;
+  return d;
+}
+function boardNode(winId){
+  const d=document.createElement('div');
+  d.innerHTML=`<div class="blist space-y-1.5 max-h-[42vh] overflow-y-auto mb-2"><div class="text-xs text-gray-400">Loading…</div></div>
+    <div class="flex gap-1.5"><input class="bin flex-1 min-w-0 bg-[#f2f6f3] px-3 py-2 text-sm outline-none" style="border-radius:0" placeholder="Note to the team…" maxlength="500" />
+    <button class="bpost bg-ink text-white text-sm font-bold px-3 shrink-0" style="border-radius:0">Post</button></div>`;
+  const list=d.querySelector('.blist');
+  const paint=async()=>{
+    if(!token){ list.innerHTML='<div class="text-xs text-gray-400">Login to read the team board.</div>'; return; }
+    try{ const rows=await api('/api/board');
+      list.innerHTML=rows.map(n=>`<div class="flat px-2.5 py-2" style="border-radius:0">
+        <div class="text-[13px]">${esc(n.text)}</div>
+        <div class="text-[10px] text-gray-400 mt-0.5 flex items-center gap-2"><span><b>${esc(n.author)}</b> • ${new Date(n.at*1000).toLocaleString()}</span><span class="flex-1"></span>${isAdmin?`<button data-nid="${n.id}" class="bdel font-bold text-red-500">delete</button>`:''}</div>
+      </div>`).join('')||'<div class="text-xs text-gray-400">No notes yet — pin the first one.</div>';
+      list.querySelectorAll('.bdel').forEach(b=>b.onclick=async()=>{ await api('/api/board/'+b.dataset.nid,{method:'DELETE'}); paint(); });
+    }catch{ list.innerHTML='<div class="text-xs text-gray-400">Login to read the team board.</div>'; }
+  };
+  d.querySelector('.bpost').onclick=async()=>{
+    const inp=d.querySelector('.bin'), t=inp.value.trim();
+    if(!token) return toast('Login first');
+    if(!t) return;
+    try{ await api('/api/board',{method:'POST',body:JSON.stringify({text:t})}); inp.value=''; paint(); }
+    catch(e){ toast('Could not post'); }
+  };
+  d.querySelector('.bin').addEventListener('keydown',e=>{ if(e.key==='Enter') d.querySelector('.bpost').click(); });
+  paint();
+  return d;
+}
+
+/* ============ tabs / modes / filters ============ */
+function setTab(t){
+  document.querySelectorAll('.tabBtn').forEach(b=>{const on=b.dataset.tab===t;b.className='tabBtn w-12 h-12 rounded-2xl font-bold '+(on?'bg-ink text-white':'bg-white flat');});
+  document.getElementById('list').classList.toggle('hidden',t!=='list');
+  document.getElementById('addPane').classList.toggle('hidden',t!=='add');
+  document.getElementById('reqPane').classList.toggle('hidden',t!=='request');
+  document.getElementById('managePane').classList.toggle('hidden',t!=='manage');
+  document.getElementById('panelTitle').textContent={list:'Service providers',add:'Add provider',request:'Request service',manage:'Manage'}[t];
+}
+function setMode(m){
+  const dash=m==='dash';
+  document.getElementById('modeDash').className='px-3 py-1.5 rounded-xl '+(dash?'bg-ink text-white':'text-gray-500');
+  document.getElementById('modeMap').className='px-3 py-1.5 rounded-xl '+(!dash?'bg-ink text-white':'text-gray-500');
+  document.getElementById('sidebar').style.display=dash?'flex':'none';
+  document.getElementById('winLayer').style.display=dash?'block':'none';
+  document.getElementById('drawbox').style.display=dash?'flex':'none';
+  renderTasks();
+  if(!dash) toast('Map mode — taskbar restores everything');
+}
+
+/* main dashboard behaves like every other window */
+let dashMax=false, dashPrev=null;
+function toggleDash(){ const s=document.getElementById('sidebar'); const vis=dashVisible();
+  s.style.display=vis?'none':'flex'; renderTasks();
+  if(!vis) toast('Dashboard restored'); }
+function openDashMenu(){
+  closeAppMenu();
+  const m=document.createElement('div'); m.className='wmenu'; m.id='wmenuOpen';
+  m.style.left='8px'; m.style.top='auto'; m.style.bottom=(TASKBAR_H+6)+'px';
+  m.innerHTML=`<button data-a="dash">◈ Main dashboard</button><button data-a="new">+ New dashboard window</button><button data-a="min">– Minimize all windows</button>`;
+  document.body.appendChild(m);
+  m.querySelector('[data-a="dash"]').onclick=()=>{closeAppMenu();toggleDash();};
+  m.querySelector('[data-a="new"]').onclick=()=>{closeAppMenu();openAppWindow('providers');};
+  m.querySelector('[data-a="min"]').onclick=()=>{closeAppMenu();minAll();};
+  setTimeout(()=>document.addEventListener('pointerdown',closeAppMenu,{once:true}),0);
+}
+function minAll(){ Object.keys(wins).forEach(minWin);
+  const s=document.getElementById('sidebar'); if(dashVisible()) s.style.display='none'; renderTasks(); }
+function toggleDashMax(){
+  const s=document.getElementById('sidebar');
+  if(!dashMax){ dashPrev={l:s.style.left,t:s.style.top,w:s.style.width,h:s.style.height,b:s.style.bottom};
+    s.style.left='0px'; s.style.top='0px'; s.style.width=innerWidth+'px';
+    s.style.height=(innerHeight-TASKBAR_H)+'px'; s.style.bottom='auto';
+    dashMax=true; document.getElementById('dashMax').textContent='❐';
+  } else { const p=dashPrev||{};
+    s.style.left=p.l||''; s.style.top=p.t||''; s.style.width=p.w||''; s.style.height=p.h||''; s.style.bottom=p.b||'';
+    dashMax=false; document.getElementById('dashMax').textContent='▢'; }
+}
+function wireDash(){
+  const s=document.getElementById('sidebar'), head=document.getElementById('dashTitle');
+  let sx=0,sy=0,ox=0,oy=0,on=false,raf=0,lx=0,ly=0;
+  const move=()=>{ raf=0; if(!on)return;
+    s.style.left=Math.min(Math.max(ox+lx-sx,-s.offsetWidth+120),innerWidth-80)+'px';
+    s.style.top=Math.max(0,oy+ly-sy)+'px'; s.style.bottom='auto'; };
+  head.addEventListener('pointerdown',e=>{ if(e.target.closest('button')||dashMax)return;
+    on=true; sx=e.clientX; sy=e.clientY; ox=s.offsetLeft; oy=s.offsetTop; lx=sx; ly=sy;
+    try{head.setPointerCapture(e.pointerId);}catch{} e.preventDefault(); });
+  head.addEventListener('pointermove',e=>{ if(!on)return; lx=e.clientX; ly=e.clientY; if(!raf)raf=requestAnimationFrame(move); });
+  const end=()=>{on=false;}; head.addEventListener('pointerup',end); head.addEventListener('pointercancel',end);
+  head.addEventListener('dblclick',e=>{ if(!e.target.closest('button'))toggleDashMax(); });
+  document.getElementById('dashMin').onclick=()=>{ s.style.display='none'; renderTasks(); };
+  document.getElementById('dashMax').onclick=()=>toggleDashMax();
+  document.getElementById('dashClose').onclick=()=>{ s.style.display='none'; renderTasks(); toast('Dashboard closed — taskbar ◈ brings it back'); };
+  const h=document.getElementById('dashResize');
+  let rx=0,ry=0,rw=0,rh=0,ron=false,rraf=0,rlx=0,rly=0;
+  const rmove=()=>{ rraf=0; if(!ron)return;
+    s.style.width=Math.min(Math.max(rw+rlx-rx,220),innerWidth-16)+'px';
+    s.style.bottom='auto'; s.style.height=Math.max(rh+rly-ry,220)+'px'; };
+  h.addEventListener('pointerdown',e=>{ if(dashMax)toggleDashMax();
+    ron=true; rx=e.clientX; ry=e.clientY; rw=s.offsetWidth; rh=s.offsetHeight; rlx=rx; rly=ry;
+    try{h.setPointerCapture(e.pointerId);}catch{} e.preventDefault(); e.stopPropagation(); });
+  h.addEventListener('pointermove',e=>{ if(!ron)return; rlx=e.clientX; rly=e.clientY; if(!rraf)rraf=requestAnimationFrame(rmove); });
+  const rend=()=>{ron=false;}; h.addEventListener('pointerup',rend); h.addEventListener('pointercancel',rend);
+}
+
+/* ============ auth ============ */
+async function loadMe(){
+  const chip=document.getElementById('userChip'), btn=document.getElementById('authBtn');
+  if(!token){ user=null; canManage=false; isAdmin=false; chip.classList.add('hidden'); chip.classList.remove('flex'); btn.textContent='Login'; renderTasks(); return; }
+  try{
+    user = await api('/api/auth/me');
+    canManage = ['admin','manager'].includes(user.role);
+    isAdmin = user.role==='admin';
+    document.getElementById('userLabel').textContent=user.name+' • '+user.role;
+    chip.classList.remove('hidden'); chip.classList.add('flex'); btn.textContent='Logout'; renderTasks();
+    document.getElementById('subHint').textContent = canManage ? 'Manager mode — drag cards/pins to re-assign.' : user.role==='provider' ? 'Provider mode — you can update your own status/location.' : 'Consumer view — search, tap slices, draw, send a request.';
+  }catch{ logout(true); }
+}
+function logout(silent){
+  token=''; user=null; canManage=false; isAdmin=false; localStorage.removeItem('atlas_token');
+  document.getElementById('userChip').classList.add('hidden');
+  document.getElementById('authBtn').textContent='Login';
+  if(!silent) toast('Logged out');
+  load();
+}
+
+/* ============ wire ============ */
+let pendingReqLoc=null;
+function wire(){
+  document.querySelectorAll('.tabBtn').forEach(b=>b.onclick=()=>setTab(b.dataset.tab));
+  document.querySelectorAll('.statusChip').forEach(b=>b.onclick=()=>{statusFilter=b.dataset.status;
+    document.querySelectorAll('.statusChip').forEach(x=>x.classList.remove('chip-active'));b.classList.add('chip-active');activeSlice=-1;load();});
+  document.getElementById('q').addEventListener('input',e=>{query=e.target.value;clearTimeout(e.target._h);e.target._h=setTimeout(()=>{activeSlice=-1;load();},250);});
+  document.getElementById('areaSel').onchange=e=>{areaFilter=e.target.value;activeSlice=-1;load();};
+  document.getElementById('resetSlice').onclick=()=>{activeSlice=-1;document.getElementById('sliceLabel').textContent='Tap a column to list that vertical slice';load();};
+  document.getElementById('collapseBtn').onclick=()=>{
+    const s=document.getElementById('sidebar'),p=document.getElementById('panel');
+    const mini=s.style.width==='76px'; s.style.width=mini?(wide?'620px':'384px'):"76px"; p.style.display=mini?'flex':'none';
+  };
+  document.getElementById('wideBtn').onclick=()=>{
+    wide=!wide; const s=document.getElementById('sidebar');
+    if(s.style.width!=='76px') s.style.width=wide?'620px':'384px';
+    toast(wide?'Wide dashboard':'Normal dashboard');
+  };
+  document.getElementById('modeDash').onclick=()=>setMode('dash');
+  document.getElementById('modeMap').onclick=()=>setMode('map');
+  // taskbar: new generic dashboard windows, main dashboard toggle, minimize-all
+  document.getElementById('newDashBtn').onclick=()=>openAppWindow('providers');
+  document.getElementById('taskNewBtn').onclick=()=>openAppWindow('providers');
+  document.getElementById('taskDashBtn').onclick=()=>toggleDash();
+  document.getElementById('dashMenuBtn').onclick=e=>{ e.stopPropagation(); openDashMenu(e.clientX, innerHeight-TASKBAR_H); };
+  // draw tools
+  document.querySelectorAll('.drawBtn').forEach(b=>b.onclick=()=>setDrawMode(drawMode===b.dataset.draw?null:b.dataset.draw));
+  document.getElementById('clearDraw').onclick=()=>{ setDrawMode(null); drawnLayer.clearLayers(); lastDraw=null;
+    Object.entries(wins).forEach(([id,w])=>{ if(w.app==='draw') renderApp(id,'draw'); });
+    activeSlice=-1; load(); toast('Drawing cleared'); };
+  // manage buttons → floating desktop windows
+  document.getElementById('mStats').onclick=()=>openAppWindow('stats');
+  document.getElementById('mReqs').onclick=()=>openAppWindow('inbox');
+  document.getElementById('mUsers').onclick=()=>openAppWindow('users');
+  document.getElementById('mAudit').onclick=()=>openAppWindow('audit');
+  document.getElementById('mListSnap').onclick=()=>openAppWindow('providers');
+  // add form
+  document.getElementById('pickBtn').onclick=()=>{picking='add';toast('Click on the map to pick coordinates');};
+  document.getElementById('geoBtn').onclick=()=>{
+    if(!navigator.geolocation) return toast('GPS unavailable');
+    navigator.geolocation.getCurrentPosition(pos=>{
+      document.getElementById('f_lat').value=pos.coords.latitude.toFixed(5);
+      document.getElementById('f_lng').value=pos.coords.longitude.toFixed(5);
+      map.flyTo([pos.coords.latitude,pos.coords.longitude],14); toast('GPS captured');
+    },()=>toast('GPS denied'));
+  };
+  document.getElementById('saveBtn').onclick=async()=>{
+    if(!canManage) return toast('Manager/admin login required');
+    const body={name:document.getElementById('f_name').value.trim(),email:document.getElementById('f_email').value.trim(),
+      phone:document.getElementById('f_phone').value.trim(),lat:parseFloat(document.getElementById('f_lat').value),
+      lng:parseFloat(document.getElementById('f_lng').value),area:document.getElementById('f_area').value.trim(),
+      status:document.getElementById('f_status').value,services:document.getElementById('f_services').value.split(',').map(s=>s.trim()).filter(Boolean)};
+    if(!body.name||!(body.lat&&body.lng)){toast('Name + valid lat/lng required');return;}
+    try{ await api('/api/providers',{method:'POST',body:JSON.stringify(body)});setTab('list');load();toast('Provider added'); }
+    catch{ toast('Manager/admin only'); }
+  };
+  // request form
+  document.getElementById('useCenter').onclick=()=>{ const c=map.getCenter(); pendingReqLoc={lat:c.lat,lng:c.lng}; toast('Using center '+c.lat.toFixed(3)+', '+c.lng.toFixed(3)); };
+  document.getElementById('reqPick').onclick=()=>{ picking='req'; reqPickMode=true; toast('Click on the map for request location'); };
+  document.getElementById('sendReq').onclick=async()=>{
+    const c=pendingReqLoc||map.getCenter();
+    const body={name:document.getElementById('r_name').value||'Guest',phone:document.getElementById('r_phone').value,lat:c.lat,lng:c.lng,note:document.getElementById('r_note').value};
+    try{ const r=await api('/api/requests',{method:'POST',body:JSON.stringify(body)});
+      const o=document.getElementById('reqOut');o.classList.remove('hidden');
+      o.innerHTML=`<b class="text-brand-700">${esc(r.message)}</b><br><span class="text-gray-500">${esc(r.assigned.phone)} • ${esc(r.assigned.services.join(', ')||'general')}</span>`;
+      pendingReqLoc=null; refreshMiniStats();
+      map.flyTo([r.assigned.lat,r.assigned.lng],13);showDetail(r.assigned.id);
+    }catch{toast('Routing failed');}
+  };
+  // auth modal
+  const modal=document.getElementById('authModal');
+  document.getElementById('authBtn').onclick=()=>{ if(token) logout(); else modal.classList.remove('hidden'); };
+  document.getElementById('authClose').onclick=()=>modal.classList.add('hidden');
+  document.getElementById('loginBtn').onclick=async()=>{
+    const email=document.getElementById('a_email').value.trim(), pass=document.getElementById('a_pass').value;
+    if(!email||!pass) return toast('Email + password required');
+    const fd=new URLSearchParams({username:email,password:pass});
+    const r=await fetch('/api/auth/login',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:fd});
+    if(!r.ok) return toast('Invalid credentials');
+    const j=await r.json(); token=j.access_token; localStorage.setItem('atlas_token',token);
+    modal.classList.add('hidden'); await loadMe(); await load(); toast('Welcome '+j.name);
+  };
+  document.getElementById('regBtn').onclick=async()=>{
+    const name=document.getElementById('a_name').value.trim()||'Guest', email=document.getElementById('a_email').value.trim(), pass=document.getElementById('a_pass').value;
+    if(!email||pass.length<6) return toast('Email + 6-char password required');
+    const r=await fetch('/api/auth/register',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,email,password:pass})});
+    if(!r.ok) return toast('Register failed: '+(await r.text()).slice(0,120));
+    toast('Registered — now login');
+  };
+  document.getElementById('pwBtn').onclick=async()=>{
+    if(!token) return toast('Login first');
+    const old=document.getElementById('p_old').value, nw=document.getElementById('p_new').value;
+    if(!old||nw.length<6) return toast('Current + new (6+) required');
+    try{ await api('/api/auth/password',{method:'POST',body:JSON.stringify({old,new:nw})});
+      document.getElementById('p_old').value=''; document.getElementById('p_new').value=''; toast('Password updated');
+    }catch{ toast('Wrong current password'); }
+  };
+  document.getElementById('csvBtn').onclick=async()=>{
+    if(!canManage) return toast('Manager/admin login required');
+    const lines=document.getElementById('csvBox').value.split('\n').map(s=>s.trim()).filter(Boolean);
+    if(!lines.length) return toast('Paste at least one row');
+    const rows=[]; const bad=[];
+    lines.forEach((ln,i)=>{
+      const c=ln.split(',').map(s=>s.trim());
+      const lat=parseFloat(c[3]), lng=parseFloat(c[4]);
+      if(!c[0]||!(lat>= -90&&lat<=90)||!(lng>=-180&&lng<=180)||isNaN(lat)||isNaN(lng)){ bad.push(i+1); return; }
+      rows.push({name:c[0],email:c[1]||'',phone:c[2]||'',lat,lng,area:c[5]||'',
+        status:['available','busy','closed'].includes(c[6])?c[6]:'available',
+        services:(c[7]||'').split(';').map(s=>s.trim()).filter(Boolean)});
+    });
+    if(!rows.length) return toast('No valid rows'+(bad.length?' • bad lines: '+bad.join(','):''));
+    try{ const r=await api('/api/providers/bulk',{method:'POST',body:JSON.stringify({providers:rows})});
+      document.getElementById('csvBox').value=''; setTab('list'); load();
+      toast('Imported '+r.created+(bad.length?' • skipped lines: '+bad.join(','):''));
+    }catch(e){ toast('Import failed: '+String(e.message||e).slice(0,100)); }
+  };
+}
+
+initMap(); wire(); wireDash(); setTab('list'); tickClock(); renderTasks(); loadMe().then(load);
+</script>
+</body>
+</html>
