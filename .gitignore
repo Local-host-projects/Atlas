@@ -8,7 +8,7 @@ venv/
 *.db
 *.db-wal
 *.db-shm
-# Secrets (never commit — set these in the Pxxl dashboard instead)
+# Secrets (never commit — set these in the Railway dashboard instead)
 .env
 # OS / editor
 .DS_Store

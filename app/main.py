@@ -37,7 +37,7 @@ _RL: dict[str, list[float]] = {}
 
 def _rl_check(request: Request, bucket: str, max_n: int, window_s: int):
     now = time.time()
-    # behind the Pxxl edge proxy (uvicorn --proxy-headers) every client would
+    # behind a reverse proxy (uvicorn --proxy-headers) every client would
     # otherwise share one IP; prefer the first X-Forwarded-For entry.
     fwd = (request.headers.get("x-forwarded-for") or "").split(",")[0].strip()
     ip = fwd or (request.client.host if request.client else "?")

@@ -18,12 +18,14 @@ Open http://localhost:8000
 Seed logins: `admin@atlas.local / admin123`, `manager@atlas.local / manager123`,
 `provider@atlas.local / provider123`.
 
-## Deploy on Pxxl
+## Deploy on Railway
 
-Push to GitHub, then Dashboard → Deploy → Import the repo.
-`pxxl.toml` already sets the build: Python 3.12,
-`pip install -r requirements.txt`,
-`uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --proxy-headers`.
+Push to GitHub, then Railway → New Project → Deploy from Repo → select this repo.
+The `Procfile` already sets the start command
+(`uvicorn app.main:app --host 0.0.0.0 --port $PORT --proxy-headers`).
 
-Set `SECRET_KEY` in Secrets, attach a managed PostgreSQL database
-(`DATABASE_URL`), then redeploy.
+1. Add a PostgreSQL service (New → Database → PostgreSQL).
+2. In the app service → Variables: add `SECRET_KEY` (long random string),
+   `NIXPACKS_PYTHON_VERSION=3.12`, and reference the database as
+   `DATABASE_URL=${{Postgres.DATABASE_URL}}`.
+3. Set the service health check path to `/health` and deploy.
